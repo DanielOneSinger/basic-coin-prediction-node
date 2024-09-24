@@ -10,8 +10,8 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://inference:8000/inference/${TOKEN}"]
       interval: 10s
-      timeout: 5s
-      retries: 12
+      timeout: 60s
+      retries: 20
     volumes:
       - ./inference-data:/app/data
   
@@ -40,6 +40,7 @@ services:
       inference:
         condition: service_healthy
     env_file:
+      - .env
       - ./worker-data/env_file
 
 volumes:
