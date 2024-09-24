@@ -8,7 +8,7 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://inference:8000/inference/${TOKEN}"]
+      test: ["CMD", "curl", "-f", "http://inference:8000/inference/ETH"]
       interval: 10s
       timeout: 60s
       retries: 20
