@@ -7,3 +7,4 @@ aiohttp
 multiprocess
 scikit_learn
 python-dotenv
+tensorflow==2.17.0
