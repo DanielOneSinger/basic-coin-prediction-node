@@ -2,17 +2,30 @@ import json
 import os
 import random
 import pickle
+import shutil
 from flask import Flask, Response
 from model import download_data, format_data, train_model, get_inference
 from config import model_file_path, TOKENS, TIMEFRAME, TRAINING_DAYS, REGION, DATA_PROVIDER
 
+def clean_data_directory():
+    """Clean the data directory by removing all files and subdirectories."""
+    data_dir = os.path.dirname(model_file_path)
+    for root, dirs, files in os.walk(data_dir, topdown=False):
+        for name in files:
+            os.remove(os.path.join(root, name))
+        for name in dirs:
+            shutil.rmtree(os.path.join(root, name))
+    print("Data directory cleaned.")
+
+# Clean data directory before starting the app
+clean_data_directory()
 
 app = Flask(__name__)
 
 # Define the list of models we want to use
 # skip:KernelRidge
 MODELS = ["LinearRegression", "SVR", "BayesianRidge", "RandomForestRegressor",
-          "GradientBoostingRegressor", "ElasticNet", "Lasso", "Ridge"]
+          "GradientBoostingRegressor", "ElasticNet", "Lasso", "Ridge", "LSTM"]
 
 
 def update_data():
@@ -29,9 +42,13 @@ def update_data():
             print(f"Trained model ({model_name}) for token ({token}) saved to {model_path}")
 
 def get_random_model(token):
-    """Randomly select and load a model for the given token."""
-    model_name = random.choice(MODELS)
-    model_path = f"{model_file_path}_{model_name}_{token}"  # 使用 token 生成模型路径
+    """Randomly select and load a model for the given token, with 70% chance of selecting LSTM."""
+    if random.random() < 0.4:
+        model_name = "LSTM"
+    else:
+        model_name = random.choice([m for m in MODELS if m != "LSTM"])
+    
+    model_path = f"{model_file_path}_{model_name}_{token}"
     with open(model_path, "rb") as f:
         model, scaler = pickle.load(f)
     return model_name, model, scaler
@@ -43,10 +60,11 @@ def generate_inference(token):
         error_msg = "Token not supported"
         return Response(json.dumps({"error": error_msg}), status=400, mimetype='application/json')
     try:
-        model_name, model, scaler = get_random_model(token)  # 传入 token
+        model_name, model, scaler = get_random_model(token)
+        print(f"Current Model: {model_name}")
         inference = get_inference(token.upper(), TIMEFRAME, REGION, DATA_PROVIDER, model, scaler)
         print(f"Current Model: {model_name}, inference: {str(inference)}")
-        if model_name in ["LinearRegression", "SVR", "BayesianRidge"]:
+        if model_name in ["LinearRegression", "SVR", "BayesianRidge","LSTM"]:
             random_factor = random.uniform(0.95, 1.05)
             adjusted_inference = inference * random_factor
             return Response(str(adjusted_inference), status=200)
