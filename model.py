@@ -8,6 +8,10 @@ from sklearn.linear_model import BayesianRidge, LinearRegression, ElasticNet, La
 from sklearn.svm import SVR
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Input
+from tensorflow.keras.optimizers import Adam
 from updater import download_binance_daily_data, download_binance_current_day_data, download_coingecko_data, download_coingecko_current_day_data
 from config import data_base_path, model_file_path, TOKENS, MODEL, CG_API_KEY
 
@@ -64,8 +68,8 @@ def format_data(files, data_provider, token):
     print(price_df.describe())
 
 def load_frame(frame, timeframe):
-    print("Loading data...")
-    print(frame.columns)
+    #print("Loading data...")
+    #print(frame.columns)
     
     required_columns = ['open', 'high', 'low', 'close', 'date']
     for col in required_columns:
@@ -84,7 +88,7 @@ def load_frame(frame, timeframe):
     print(df.head())
     return df
 
-def get_model(model_name):
+def get_model(model_name, input_shape=None):
     models = {
         "LinearRegression": LinearRegression(),
         "SVR": SVR(),
@@ -96,8 +100,24 @@ def get_model(model_name):
         "Lasso": Lasso(),
         "Ridge": Ridge()
     }
+    if model_name == "LSTM":
+        model = Sequential([
+            LSTM(50, activation='relu', input_shape=input_shape, return_sequences=True),
+            LSTM(50, activation='relu'),
+            Dense(1)
+        ])
+        model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+        return model
     return models.get(model_name)
 
+def create_lstm_model():
+    model = Sequential([
+        LSTM(50, activation='relu', input_shape=(30, 4), return_sequences=True),
+        LSTM(50, activation='relu'),
+        Dense(1)
+    ])
+    model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+    return model
 
 def train_model(timeframe, model_name, token):
     file_path = f"{training_price_data_path}_{token}.csv"
@@ -105,48 +125,51 @@ def train_model(timeframe, model_name, token):
         raise FileNotFoundError(f"File not found or empty: {file_path}")
     
     price_data = pd.read_csv(file_path)
-    print(price_data.columns)
-    print('xxxxx')
     df = load_frame(price_data, timeframe)
 
-    print(df.tail())
-
-    y_train = df['close'].shift(-1).dropna().values
-    X_train = df[:-1]
-
-    print(f"Training data shape: {X_train.shape}, {y_train.shape}")
-
-    # Feature scaling
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    
+    X = df[['open', 'high', 'low', 'close']]
+    y = df['close']
+    X_scaled = scaler.fit_transform(X)
+    X_scaled = pd.DataFrame(X_scaled, columns=X.columns)
 
-    # Get the specified model
-    model = get_model(model_name)
-    if model is None:
-        raise ValueError(f"Unsupported model: {model_name}")
+    X_prepared, y_prepared = prepare_data(X_scaled)
 
-    print(f"Training model: {model_name} with data shape: {X_train_scaled.shape}")  # 添加调试输出
-
-    # Train the model
-    model.fit(X_train_scaled, y_train)
+    if model_name == "LSTM":
+        model = get_model(model_name, input_shape=(X_prepared.shape[1], X_prepared.shape[2]))
+        model.fit(X_prepared, y_prepared, epochs=50, batch_size=32, verbose=0)
+    else:
+        model = get_model(model_name)
+        model.fit(X_prepared.reshape(X_prepared.shape[0], -1), y_prepared)
 
     return model, scaler
 
+def prepare_data(df, n_steps=1):
+    X, y = [], []
+    for i in range(len(df) - n_steps):
+        X.append(df.iloc[i:(i + n_steps)].values)
+        y.append(df['close'].iloc[i + n_steps])
+    return np.array(X), np.array(y)
 
 def get_inference(token, timeframe, region, data_provider, model, scaler):
-    """Predict current price using the provided model."""
-    # Get current price
     if data_provider == "coingecko":
         X_new = load_frame(download_coingecko_current_day_data(token, CG_API_KEY), timeframe)
     else:
         X_new = load_frame(download_binance_current_day_data(f"{token}USDT", region), timeframe)
 
-    print(X_new.tail())
-    print(X_new.shape)
-
-    # Scale the new data
+    X_new = X_new[['open', 'high', 'low', 'close']]
     X_new_scaled = scaler.transform(X_new)
+    X_new_prepared, _ = prepare_data(pd.DataFrame(X_new_scaled, columns=X_new.columns))
 
-    current_price_pred = model.predict(X_new_scaled)
+    if isinstance(model, tf.keras.Model):  # Check if the model is LSTM
+        current_price_pred = model.predict(X_new_prepared)
+    else:
+        current_price_pred = model.predict(X_new_prepared.reshape(X_new_prepared.shape[0], -1))
+
+    # Inverse transform the prediction
+    current_price_pred = current_price_pred.reshape(-1, 1)
+    current_price_pred = np.hstack([np.zeros((current_price_pred.shape[0], 3)), current_price_pred])
+    current_price_pred = scaler.inverse_transform(current_price_pred)[:, -1]
 
     return current_price_pred[0]
